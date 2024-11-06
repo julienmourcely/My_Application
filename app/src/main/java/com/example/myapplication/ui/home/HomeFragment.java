@@ -9,6 +9,10 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -54,19 +58,29 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.Locale;
 
-public class HomeFragment extends Fragment {
+public class HomeFragment extends Fragment implements SensorEventListener {
 
     private static final int CAMERA_PERMISSION_CODE = 100;
     private static final int LOCATION_PERMISSION_CODE = 101;
-
     private static final int REQUEST_SEND_SMS = 102;
+
     private Button btnPicture;
     private TextureView textureView;
     private CameraDevice cameraDevice;
     private CameraCaptureSession cameraCaptureSession;
     private CaptureRequest.Builder captureRequestBuilder;
     private ImageReader imageReader;
-    private FusedLocationProviderClient fusedLocationClient; // Client de localisation
+    private FusedLocationProviderClient fusedLocationClient;
+
+    private SensorManager sensorManager;
+    private float phonePitchAngle; // To store the phone's inclination
+    private double smartphoneAltitude = 1500; // Altitude of 1.5 m
+    private double phoneAzimuth; // To store the phone's azimuth
+
+    private float[] accelerometerReading = new float[3];
+    private float[] magnetometerReading = new float[3];
+    private float[] rotationMatrix = new float[9];
+    private float[] orientationAngles = new float[3];
 
     @Nullable
     @Override
@@ -75,9 +89,7 @@ public class HomeFragment extends Fragment {
         btnPicture = view.findViewById(R.id.btncamera_id);
         textureView = view.findViewById(R.id.texture_view);
 
-        // Initialiser le client de localisation
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(requireContext());
-
         checkPermissions();
 
         btnPicture.setOnClickListener(new View.OnClickListener() {
@@ -105,6 +117,12 @@ public class HomeFragment extends Fragment {
             @Override
             public void onSurfaceTextureUpdated(SurfaceTexture surface) {}
         });
+
+        sensorManager = (SensorManager) requireContext().getSystemService(Context.SENSOR_SERVICE);
+        Sensor accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        Sensor magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+        sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_UI);
 
         return view;
     }
@@ -233,6 +251,30 @@ public class HomeFragment extends Fragment {
         return (sensorOrientation + deviceRotation + 270) % 360;
     }
 
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+            System.arraycopy(event.values, 0, accelerometerReading, 0, accelerometerReading.length);
+        } else if (event.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
+            System.arraycopy(event.values, 0, magnetometerReading, 0, magnetometerReading.length);
+        }
+
+        if (SensorManager.getRotationMatrix(rotationMatrix, null, accelerometerReading, magnetometerReading)) {
+            SensorManager.getOrientation(rotationMatrix, orientationAngles);
+            // pitch in degree
+            phonePitchAngle = (float) Math.toDegrees(orientationAngles[1]);
+            // azimut in degree
+            phoneAzimuth = (Math.toDegrees(orientationAngles[0]) + 360) % 360; // Azimuth in degrees
+        }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        // Not used in this example
+    }
+
+    // Modify the takePictureAndCalculateCoordinates method
     @SuppressLint("MissingPermission")
     private void takePictureAndCalculateCoordinates() {
         takePicture();
@@ -241,25 +283,22 @@ public class HomeFragment extends Fragment {
             @Override
             public void onSuccess(Location location) {
                 if (location != null) {
-                    // Coordonnées GPS réelles de l'utilisateur
-                    Point userLocation = new Point(location.getLatitude(), location.getLongitude());
+                    double latitude = location.getLatitude();
+                    double longitude = location.getLongitude();
+                    Point smartphonePoint = new Point(latitude, longitude);
 
-                    // Calcul de la coordonnée cible avec un azimut et une distance
-                    double azimut = 45.0; // Exemple d'azimut
-                    double distance = 100.0; // Exemple de distance en mètres
-                    //Point targetPoint = userLocation.destination(distance, azimut);
-                    Point targetPoint = userLocation;
+                    double azimut = -phoneAzimuth; // -azimut because the direction are inverted
 
-                    String message = String.format(Locale.getDefault(),
-                            "Coordonnées cibles :\nLatitude : %.5f\nLongitude : %.5f\nAltitude : %.2f m",
-                            targetPoint.lat, targetPoint.lon, targetPoint.alt);
+                    double elevationAngle = phonePitchAngle; // Use phone's inclination angle
+                    double distance = smartphoneAltitude * Math.tan(Math.toRadians(elevationAngle));
 
-                    // Changer le numéro si nécessaire
-                    sendSMS("num", message);
+                    Point destinationPoint = smartphonePoint.destination(distance, azimut);
+                    double distanceToSmokePoint = smartphonePoint.distance(new Point(destinationPoint.lat,destinationPoint.lon));
 
+                    String smokeMessage = String.format("coord : (%.5f, %.5f)", destinationPoint.lat, destinationPoint.lon);
 
-                    // Mettre à jour le texte du bouton avec les coordonnées cibles
-                    btnPicture.setText(String.format(Locale.getDefault(), "Lat: %.5f, Lon: %.5f", targetPoint.lat, targetPoint.lon));
+                    sendSMS("       num        ", smokeMessage);
+                    btnPicture.setText(String.format(Locale.getDefault(), "Lat: %.5f, Lon: %.5f", destinationPoint.lat, destinationPoint.lon));
                 } else {
                     Toast.makeText(requireContext(), "Impossible d'obtenir la localisation", Toast.LENGTH_SHORT).show();
                 }
@@ -348,7 +387,7 @@ public class HomeFragment extends Fragment {
                 fos.write(bytes);
                 Toast.makeText(requireContext(), "Image saved: " + file.getPath(), Toast.LENGTH_SHORT).show();
                 // Changer le numéro si nécessaire
-                sendMmsWithImage(file, "num");
+                sendMmsWithImage(file, "       num          ");
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
@@ -442,15 +481,16 @@ public class HomeFragment extends Fragment {
     }
 
     @Override
-    public void onPause() {
-        super.onPause();
-        closeCamera(); // Close the camera when the fragment is paused
+    public void onResume() {
+        super.onResume();
+        sensorManager.registerListener(this, sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), SensorManager.SENSOR_DELAY_UI);
+        sensorManager.registerListener(this, sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD), SensorManager.SENSOR_DELAY_UI);
     }
 
     @Override
-    public void onResume() {
-        super.onResume();
-        openCamera(); // Close the camera when the fragment is paused
+    public void onPause() {
+        super.onPause();
+        sensorManager.unregisterListener(this);
     }
 
     @Override

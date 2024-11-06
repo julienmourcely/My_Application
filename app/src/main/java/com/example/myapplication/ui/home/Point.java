@@ -31,18 +31,25 @@ public class Point {
         return 180 * aziRad / Math.PI;
     }
 
-    // Calculus of the destination coordinates using origin coordinates, distance and azimut of the destination point
+    // Calculus of the destination coordinates using origin coordinates, distance, and azimuth of the destination point
     Point destination(double d, double azi) {
+        Point dest = new Point(0, 0);
+        double l1 = this.lat / 180 * Math.PI; // Convert latitude from degrees to radians
+        double aziRad = azi / 180 * Math.PI; // Convert azimuth from degrees to radians
 
-        Point dest = new Point(0,0);
-        double l1=this.lat/180*Math.PI;
-        double aziRad=azi/180*Math.PI;
-        double destLat = Math.asin( Math.sin(l1)*Math.cos(d/R) +
-                Math.cos(l1)*Math.sin(d/R)*Math.cos(aziRad));
-        double y = Math.sin(aziRad)*Math.sin(d/R)*Math.cos(l1);
-        double x = Math.cos(d/R) - Math.sin(l1)*Math.sin(destLat);
-        dest.lat = 180*destLat/Math.PI;
-        dest.lon = this.lat + 180*Math.atan2(y,x)/Math.PI;
+        // Calculate destination latitude
+        double destLat = Math.asin(Math.sin(l1) * Math.cos(d / R) +
+                Math.cos(l1) * Math.sin(d / R) * Math.cos(aziRad));
+
+        // Calculate intermediate values for destination longitude
+        double y = Math.sin(aziRad) * Math.sin(d / R) * Math.cos(l1);
+        double x = Math.cos(d / R) - Math.sin(l1) * Math.sin(destLat);
+
+        // Set destination coordinates
+        dest.lat = 180 * destLat / Math.PI; // Convert destination latitude back to degrees
+        dest.lon = this.lon + 180 * Math.atan2(y, x) / Math.PI; // Adjust longitude and convert to degrees
+
         return dest;
     }
+
 }
